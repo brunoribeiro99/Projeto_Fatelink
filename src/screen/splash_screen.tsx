@@ -1,21 +1,25 @@
 import { useEffect } from "react";
 import { Dimensions, Image, StyleSheet, Text, View } from "react-native";
 import Animated, {
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withDelay,
-    withSpring,
-    withTiming,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 
 const { width, height } = Dimensions.get("window");
 
 interface SplashScreenProps {
+  navigation?: any;
   onFinish?: () => void;
 }
 
-export default function SplashScreen({ onFinish }: SplashScreenProps) {
+export default function SplashScreen({
+  navigation,
+  onFinish,
+}: SplashScreenProps) {
   // 1. Círculo 01: rola da esquerda para o centro no sentido dos ponteiros do relógio
   const circle1TranslateX = useSharedValue(-width * 0.4);
   const circle1Rotate = useSharedValue(0);
@@ -74,13 +78,17 @@ export default function SplashScreen({ onFinish }: SplashScreenProps) {
       }),
     );
 
-    if (onFinish) {
-      const timer = setTimeout(() => {
+    // Transição automática para a tela de Login
+    const timer = setTimeout(() => {
+      if (navigation) {
+        navigation.replace("Login");
+      } else if (onFinish) {
         onFinish();
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, []);
+      }
+    }, 2800);
+
+    return () => clearTimeout(timer);
+  }, [navigation, onFinish]);
 
   // Estilos animados do Círculo 01
   const animatedCircle1Style = useAnimatedStyle(() => ({
@@ -167,7 +175,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#B1D9FF",
     overflow: "hidden",
   },
-  // Seta posicionada para ficar por baixo dos círculos e ligar ao centro
   setaContainer: {
     position: "absolute",
     top: height * 0.13,
@@ -180,7 +187,6 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
-  // Posição fixa dos círculos no quadrante lateral esquerdo
   circlesArea: {
     position: "absolute",
     top: height * 0.22,
@@ -206,7 +212,6 @@ const styles = StyleSheet.create({
     width: "70%",
     height: "70%",
   },
-  // Logo centralizada com maior escala visual
   logoContainer: {
     position: "absolute",
     top: height * 0.07,
@@ -217,7 +222,6 @@ const styles = StyleSheet.create({
     width: width * 0.85,
     height: 150,
   },
-  // Rodapé alinhado
   footerContainer: {
     position: "absolute",
     bottom: 28,
