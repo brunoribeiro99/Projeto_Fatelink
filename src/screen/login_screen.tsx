@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -16,14 +17,45 @@ import {
 
 // Firebase imports
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
 import { auth, db } from "../service/firebaseConfig";
 
 const { width } = Dimensions.get("window");
 
+// Máscara dinâmica: E-mail livre ou formatação automática de CPF / CNPJ
+function formatIdentificador(value: string) {
+  if (/[a-zA-Z@]/.test(value)) {
+    return value;
+  }
+
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length <= 11) {
+    return digits
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+  }
+
+  return digits
+    .slice(0, 14)
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+}
+
 export default function LoginScreen({ navigation }: any) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
+  const [mostrarSenha, setMostrarSenha] = useState(false);
   const [carregando, setCarregando] = useState(false);
 
   // Estados do Modal de Alerta
@@ -38,27 +70,76 @@ export default function LoginScreen({ navigation }: any) {
   };
 
   const handleLogin = async () => {
-    if (!usuario.trim()) {
-      return showAlert("Campo obrigatório", "Por favor, digite seu e-mail.");
+    const termo = usuario.trim();
+
+    if (!termo) {
+      return showAlert(
+        "Campo obrigatório",
+        "Por favor, introduza o seu E-mail, CPF ou CNPJ.",
+      );
     }
 
     if (!senha) {
-      return showAlert("Campo obrigatório", "Por favor, digite sua senha.");
+      return showAlert(
+        "Campo obrigatório",
+        "Por favor, introduza a sua palavra-passe.",
+      );
     }
 
     try {
       setCarregando(true);
 
-      // 1. Autentica no Firebase Authentication
+      let emailFinal = termo.toLowerCase();
+      const apenasDigitos = termo.replace(/\D/g, "");
+
+      // Se não contiver '@', realiza a consulta por CPF ou CNPJ no Firestore
+      if (!termo.includes("@")) {
+        let q;
+
+        if (apenasDigitos.length === 11) {
+          // Consulta aluno pelo CPF
+          q = query(
+            collection(db, "usuarios"),
+            where("cpf", "==", apenasDigitos),
+          );
+        } else if (apenasDigitos.length === 14) {
+          // Consulta empresa pelo CNPJ
+          q = query(
+            collection(db, "usuarios"),
+            where("cnpj", "==", apenasDigitos),
+          );
+        } else {
+          setCarregando(false);
+          return showAlert(
+            "Identificador inválido",
+            "Introduza um e-mail válido, um CPF com 11 dígitos ou um CNPJ com 14 dígitos.",
+          );
+        }
+
+        const querySnapshot = await getDocs(q);
+
+        if (querySnapshot.empty) {
+          setCarregando(false);
+          return showAlert(
+            "Registo não encontrado",
+            "Nenhum utilizador encontrado com este CPF/CNPJ.",
+          );
+        }
+
+        const usuarioDoc = querySnapshot.docs[0].data();
+        emailFinal = usuarioDoc.email;
+      }
+
+      // 1. Autenticação através do Firebase Auth utilizando o e-mail resolvido
       const userCredential = await signInWithEmailAndPassword(
         auth,
-        usuario.trim().toLowerCase(),
+        emailFinal,
         senha,
       );
 
       const uid = userCredential.user.uid;
 
-      // 2. Busca o documento com o tipo do usuário no Firestore
+      // 2. Consulta do perfil na coleção "usuarios" para leitura do campo "tipo"
       const userDocRef = doc(db, "usuarios", uid);
       const userSnap = await getDoc(userDocRef);
 
@@ -67,18 +148,21 @@ export default function LoginScreen({ navigation }: any) {
       if (userSnap.exists()) {
         const dados = userSnap.data();
 
-        // 3. Roteamento condicional baseado no tipo
+        // 3. Encaminhamento condicional conforme a role definida
         if (dados.tipo === "aluno") {
-          navigation.replace("aluno_dashboard_home");
+          navigation.replace("aluno_home_screen");
         } else if (dados.tipo === "empresa") {
-          navigation.replace("empresa_dashboard_home");
+          navigation.replace("empresa_home_screen");
         } else {
-          showAlert("Atenção", "Tipo de usuário não identificado no sistema.");
+          showAlert(
+            "Atenção",
+            "Tipo de utilizador não reconhecido no sistema.",
+          );
         }
       } else {
         showAlert(
-          "Perfil não encontrado",
-          "Não encontramos dados cadastrais para este usuário.",
+          "Perfil em falta",
+          "Não foram encontrados os dados cadastrais deste utilizador.",
         );
       }
     } catch (error: any) {
@@ -89,23 +173,29 @@ export default function LoginScreen({ navigation }: any) {
         error.code === "auth/user-not-found" ||
         error.code === "auth/wrong-password"
       ) {
-        return showAlert("Acesso negado", "E-mail ou senha incorretos.");
+        return showAlert(
+          "Acesso recusado",
+          "Credenciais ou palavra-passe incorretas.",
+        );
       }
 
       if (error.code === "auth/invalid-email") {
-        return showAlert("E-mail inválido", "O formato do e-mail é inválido.");
+        return showAlert(
+          "E-mail inválido",
+          "O formato do e-mail introduzido é inválido.",
+        );
       }
 
       if (error.code === "auth/network-request-failed") {
         return showAlert(
-          "Sem conexão",
-          "Verifique sua conexão com a internet.",
+          "Falha de ligação",
+          "Verifique a sua ligação à Internet.",
         );
       }
 
       return showAlert(
         "Erro no login",
-        error.message || "Ocorreu um erro ao acessar a conta. Tente novamente.",
+        error.message || "Ocorreu um erro ao entrar. Tente novamente.",
       );
     }
   };
@@ -119,7 +209,7 @@ export default function LoginScreen({ navigation }: any) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* 1. Logotipo centralizado no topo */}
+        {/* Logótipo */}
         <View style={styles.headerLogoContainer}>
           <Image
             source={require("../../assets/images/logo.png")}
@@ -128,36 +218,47 @@ export default function LoginScreen({ navigation }: any) {
           />
         </View>
 
-        {/* 2. Card Central */}
+        {/* Card Central */}
         <View style={styles.cardContainer}>
           <Text style={styles.title}>ENTRE EM SUA CONTA</Text>
 
-          {/* Campo E-mail */}
+          {/* Campo E-mail / CPF / CNPJ com máscara */}
           <View style={styles.inputWrapper}>
             <TextInput
               style={styles.input}
-              placeholder="EMAIL"
+              placeholder="EMAIL / CPF / CNPJ"
               placeholderTextColor="#A0A0A0"
               value={usuario}
-              onChangeText={setUsuario}
+              onChangeText={(text) => setUsuario(formatIdentificador(text))}
               autoCapitalize="none"
-              keyboardType="email-address"
+              autoCorrect={false}
             />
           </View>
 
-          {/* Campo Senha */}
-          <View style={styles.inputWrapper}>
+          {/* Campo Palavra-passe com ícone de visibilidade */}
+          <View style={[styles.inputWrapper, styles.passwordWrapper]}>
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.passwordInput]}
               placeholder="SENHA"
               placeholderTextColor="#A0A0A0"
-              secureTextEntry
+              secureTextEntry={!mostrarSenha}
               value={senha}
               onChangeText={setSenha}
             />
+            <TouchableOpacity
+              style={styles.eyeButton}
+              activeOpacity={0.7}
+              onPress={() => setMostrarSenha(!mostrarSenha)}
+            >
+              <Ionicons
+                name={mostrarSenha ? "eye" : "eye-off"}
+                size={20}
+                color="#777777"
+              />
+            </TouchableOpacity>
           </View>
 
-          {/* Botão ENTRAR */}
+          {/* Botão Entrar */}
           <TouchableOpacity
             style={styles.btnEntrar}
             activeOpacity={0.8}
@@ -171,7 +272,7 @@ export default function LoginScreen({ navigation }: any) {
             )}
           </TouchableOpacity>
 
-          {/* Divisor OU */}
+          {/* Separador */}
           <Text style={styles.ouText}>OU</Text>
 
           {/* Botões Sociais */}
@@ -194,7 +295,7 @@ export default function LoginScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
 
-        {/* 3. Rodapé com os nomes */}
+        {/* Rodapé */}
         <View style={styles.footerContainer}>
           <Text style={styles.footerFrom}>From</Text>
           <Text style={styles.footerNames}>
@@ -278,6 +379,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 14,
     paddingHorizontal: 20,
+  },
+  passwordWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    position: "relative",
+  },
+  passwordInput: {
+    flex: 1,
+    paddingRight: 32,
+  },
+  eyeButton: {
+    position: "absolute",
+    right: 16,
+    height: 48,
+    justifyContent: "center",
+    alignItems: "center",
   },
   input: {
     fontSize: 13,

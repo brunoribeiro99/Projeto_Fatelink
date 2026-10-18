@@ -1,23 +1,30 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Dimensions,
-    Image,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Dimensions,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 // Firebase imports
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { auth, db } from "../service/firebaseConfig";
 
 const { width } = Dimensions.get("window");
@@ -73,19 +80,17 @@ export default function RegisterScreen({ navigation }: any) {
   // Loading
   const [carregando, setCarregando] = useState(false);
 
-  // Controle de visibilidade das senhas
+  // Visibilidade de senhas
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [mostrarConfirmarSenha, setMostrarConfirmarSenha] = useState(false);
 
-  // Pop-up apenas para validação geral ou sucesso
+  // Modal de retorno
   const [modalVisible, setModalVisible] = useState(false);
   const [modalTitle, setModalTitle] = useState("");
   const [modalMessage, setModalMessage] = useState("");
   const [isSuccess, setIsSuccess] = useState(false);
 
-  // =====================================================
-  // REGRAS DA SENHA
-  // =====================================================
+  // Regras da Senha
   const hasEightCharacters = senha.length >= 8;
   const hasUppercase = /[A-Z]/.test(senha);
   const hasNumber = /\d/.test(senha);
@@ -100,13 +105,8 @@ export default function RegisterScreen({ navigation }: any) {
 
   const getPasswordStrength = () => {
     if (!senha) {
-      return {
-        level: 0,
-        text: "",
-        color: "transparent",
-      };
+      return { level: 0, text: "", color: "transparent" };
     }
-
     if (passwordScore <= 1) {
       return {
         level: 1,
@@ -114,25 +114,13 @@ export default function RegisterScreen({ navigation }: any) {
         color: "#E53935",
       };
     }
-
     if (passwordScore <= 3) {
-      return {
-        level: 2,
-        text: "Senha média",
-        color: "#F58427",
-      };
+      return { level: 2, text: "Senha média", color: "#F58427" };
     }
-
-    return {
-      level: 3,
-      text: "Senha forte",
-      color: "#43A047",
-    };
+    return { level: 3, text: "Senha forte", color: "#43A047" };
   };
 
   const strength = getPasswordStrength();
-
-  // Status da confirmação de senha
   const isMatch =
     senha.length > 0 && confirmarSenha.length > 0 && senha === confirmarSenha;
   const isMismatch = confirmarSenha.length > 0 && senha !== confirmarSenha;
@@ -145,17 +133,21 @@ export default function RegisterScreen({ navigation }: any) {
   };
 
   const handleCadastrar = async () => {
+    const rawTelefone = telefone.replace(/\D/g, "");
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Validações de formato básicas
     if (userType === "aluno") {
       if (nome.trim().length < 8) {
         return showAlert(
           "Nome inválido",
-          "Por gentileza, verifique seu nome completo (mínimo 8 caracteres).",
+          "Por gentileza, verifique o seu nome completo (mínimo 8 caracteres).",
         );
       }
       if (cpf.replace(/\D/g, "").length !== 11) {
         return showAlert(
           "CPF incompleto",
-          "Por gentileza, verifique seu CPF (11 dígitos).",
+          "Por gentileza, verifique o seu CPF (11 dígitos).",
         );
       }
     } else {
@@ -174,30 +166,30 @@ export default function RegisterScreen({ navigation }: any) {
       if (cnpj.replace(/\D/g, "").length !== 14) {
         return showAlert(
           "CNPJ incompleto",
-          "Por gentileza, verifique o CNPJ informado.",
+          "Por gentileza, verifique o CNPJ informado (14 dígitos).",
         );
       }
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email.trim())) {
+    if (!emailRegex.test(cleanEmail)) {
       return showAlert(
         "E-mail inválido",
         "Por gentileza, insira um endereço de e-mail válido.",
       );
     }
 
-    if (telefone.replace(/\D/g, "").length < 10) {
+    if (rawTelefone.length < 10) {
       return showAlert(
         "Telefone incompleto",
-        "Por gentileza, preencha seu telefone com DDD.",
+        "Por gentileza, preencha o seu telefone com o DDD.",
       );
     }
 
     if (!hasEightCharacters || !hasUppercase || !hasNumber || !hasSymbol) {
       return showAlert(
         "Senha fraca",
-        "A senha precisa conter no mínimo 8 caracteres, letra maiúscula, número e caractere especial.",
+        "A senha precisa de conter no mínimo 8 caracteres, letra maiúscula, número e símbolo.",
       );
     }
 
@@ -211,15 +203,71 @@ export default function RegisterScreen({ navigation }: any) {
     try {
       setCarregando(true);
 
-      // 1. Cria a conta no Firebase Authentication
+      const usuariosRef = collection(db, "usuarios");
+
+      // 2. Verificação de Duplicidade no Firestore: Telefone
+      const telQuery = query(usuariosRef, where("telefone", "==", rawTelefone));
+      const telSnap = await getDocs(telQuery);
+      if (!telSnap.empty) {
+        setCarregando(false);
+        return showAlert(
+          "Telefone em uso",
+          "Este número de telefone já se encontra registado noutra conta.",
+        );
+      }
+
+      // 3. Verificação de Duplicidade específica por tipo de perfil
+      if (userType === "aluno") {
+        const rawCpf = cpf.replace(/\D/g, "");
+        const cpfQuery = query(usuariosRef, where("cpf", "==", rawCpf));
+        const cpfSnap = await getDocs(cpfQuery);
+
+        if (!cpfSnap.empty) {
+          setCarregando(false);
+          return showAlert(
+            "CPF já registado",
+            "Este CPF já possui uma conta ativa no FateLink.",
+          );
+        }
+      } else {
+        const rawCnpj = cnpj.replace(/\D/g, "");
+        const cleanRazao = razaoSocial.trim();
+
+        // Checar CNPJ
+        const cnpjQuery = query(usuariosRef, where("cnpj", "==", rawCnpj));
+        const cnpjSnap = await getDocs(cnpjQuery);
+        if (!cnpjSnap.empty) {
+          setCarregando(false);
+          return showAlert(
+            "CNPJ já registado",
+            "Este CNPJ já possui uma conta de empresa registada.",
+          );
+        }
+
+        // Checar Razão Social
+        const razaoQuery = query(
+          usuariosRef,
+          where("razaoSocial", "==", cleanRazao),
+        );
+        const razaoSnap = await getDocs(razaoQuery);
+        if (!razaoSnap.empty) {
+          setCarregando(false);
+          return showAlert(
+            "Razão Social em uso",
+            "Já existe uma empresa registada com esta Razão Social.",
+          );
+        }
+      }
+
+      // 4. Criação do utilizador no Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(
         auth,
-        email.trim(),
+        cleanEmail,
         senha,
       );
       const uid = userCredential.user.uid;
 
-      // 2. Monta o objeto correspondente ao tipo de perfil
+      // 5. Montagem dos dados para persistência
       const userData =
         userType === "aluno"
           ? {
@@ -227,8 +275,8 @@ export default function RegisterScreen({ navigation }: any) {
               tipo: "aluno",
               nome: nome.trim(),
               cpf: cpf.replace(/\D/g, ""),
-              email: email.trim().toLowerCase(),
-              telefone: telefone.replace(/\D/g, ""),
+              email: cleanEmail,
+              telefone: rawTelefone,
               curriculoUrl: "",
               criadoEm: new Date().toISOString(),
             }
@@ -238,18 +286,18 @@ export default function RegisterScreen({ navigation }: any) {
               razaoSocial: razaoSocial.trim(),
               nomeFantasia: nomeFantasia.trim(),
               cnpj: cnpj.replace(/\D/g, ""),
-              email: email.trim().toLowerCase(),
-              telefone: telefone.replace(/\D/g, ""),
+              email: cleanEmail,
+              telefone: rawTelefone,
               criadoEm: new Date().toISOString(),
             };
 
-      // 3. Salva no Cloud Firestore na coleção "usuarios"
+      // 6. Gravação na coleção "usuarios"
       await setDoc(doc(db, "usuarios", uid), userData);
 
       setCarregando(false);
       showAlert(
         "Sucesso!",
-        "Cadastro realizado com sucesso! Redirecionando para o login...",
+        "Registo realizado com sucesso! A redirecionar para o login...",
         true,
       );
 
@@ -262,8 +310,8 @@ export default function RegisterScreen({ navigation }: any) {
 
       if (error.code === "auth/email-already-in-use") {
         return showAlert(
-          "E-mail já cadastrado",
-          "Já existe uma conta cadastrada com este endereço de e-mail.",
+          "E-mail já registado",
+          "Já existe uma conta registada com este endereço de e-mail.",
         );
       }
       if (error.code === "auth/invalid-email") {
@@ -271,15 +319,15 @@ export default function RegisterScreen({ navigation }: any) {
       }
       if (error.code === "auth/network-request-failed") {
         return showAlert(
-          "Falha de conexão",
-          "Verifique sua conexão com a internet.",
+          "Falha de ligação",
+          "Verifique a sua ligação à Internet.",
         );
       }
 
       return showAlert(
-        "Erro no cadastro",
+        "Erro no registo",
         error.message ||
-          "Ocorreu um erro ao realizar o cadastro. Tente novamente.",
+          "Ocorreu um erro ao realizar o registo. Tente novamente.",
       );
     }
   };
@@ -293,7 +341,7 @@ export default function RegisterScreen({ navigation }: any) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Logotipo */}
+        {/* Logótipo */}
         <View style={styles.headerLogoContainer}>
           <Image
             source={require("../../assets/images/logo.png")}
@@ -440,7 +488,7 @@ export default function RegisterScreen({ navigation }: any) {
             />
           </View>
 
-          {/* SENHA (COM OLINHO E BORDA DINÂMICA) */}
+          {/* SENHA */}
           <View
             style={[
               styles.inputWrapper,
@@ -479,7 +527,7 @@ export default function RegisterScreen({ navigation }: any) {
             </Text>
           )}
 
-          {/* CONFIRMAR SENHA (COM OLINHO E BORDA DINÂMICA) */}
+          {/* CONFIRMAR SENHA */}
           <View
             style={[
               styles.inputWrapper,
@@ -625,8 +673,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-
-  // SELETOR EMPRESA / ALUNO
   toggleContainer: {
     width: "80%",
     marginBottom: 20,
@@ -662,8 +708,6 @@ const styles = StyleSheet.create({
   toggleLabelActive: {
     color: "#000000",
   },
-
-  // CAMPOS DE INPUT
   inputWrapper: {
     width: "100%",
     backgroundColor: "#ECECEC",
@@ -711,8 +755,6 @@ const styles = StyleSheet.create({
     marginTop: -8,
     marginBottom: 10,
   },
-
-  // BOTÕES
   btnCadastrar: {
     width: "60%",
     backgroundColor: "#5599FE",
@@ -753,8 +795,6 @@ const styles = StyleSheet.create({
     textDecorationLine: "underline",
     letterSpacing: 0.5,
   },
-
-  // RODAPÉ
   footerContainer: {
     marginTop: 20,
     alignItems: "center",
@@ -772,8 +812,6 @@ const styles = StyleSheet.create({
     color: "#000000",
     letterSpacing: 0.3,
   },
-
-  // MODAL / POP-UP
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.45)",
