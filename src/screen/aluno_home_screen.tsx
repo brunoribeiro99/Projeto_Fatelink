@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
+import { Image } from "react-native";
 import {
   Dimensions,
   Modal,
@@ -568,6 +569,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
 
+  
   // ÁREA DO CARD DE VAGA
   cardArea: {
     flex: 1,

@@ -1,25 +1,32 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Dimensions,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    TouchableWithoutFeedback,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View,
 } from "react-native";
 
-// Firebase imports
 import { doc, getDoc, updateDoc } from "firebase/firestore";
+import {
+  CertificadoModel,
+  CurriculoModel,
+} from "../../models/aluno_arqs_model";
+import { AlunoArquivosService } from "../../service/aluno_arq_service";
 import { auth, db } from "../../service/firebaseConfig";
 
-const { height, width } = Dimensions.get("window");
+const { height } = Dimensions.get("window");
 
 interface ModalEditarPerfilAlunoProps {
   visible: boolean;
@@ -56,40 +63,45 @@ export default function ModalEditarPerfilAluno({
   const [salvando, setSalvando] = useState(false);
   const [carregandoDados, setCarregandoDados] = useState(false);
 
-  // Controle de cards retráteis (sanfona)
+  // Controle de acordion
   const [cardAberto, setCardAberto] = useState<string>("dadosBasicos");
 
-  // Campos Pessoais
+  // Informações Pessoais
   const [nome, setNome] = useState("");
   const [cpf, setCpf] = useState("");
   const [idade, setIdade] = useState("");
   const [endereco, setEndereco] = useState("");
   const [email, setEmail] = useState("");
   const [telefone, setTelefone] = useState("");
+  const [fotoUrl, setFotoUrl] = useState("");
+  const [enviandoFoto, setEnviandoFoto] = useState(false);
 
-  // Campos Profissionais
+  // Informações Profissionais
   const [curso, setCurso] = useState(CURSOS_FATEC[0]);
   const [semestre, setSemestre] = useState(SEMESTRES[0]);
   const [showDropdownCurso, setShowDropdownCurso] = useState(false);
   const [showDropdownSemestre, setShowDropdownSemestre] = useState(false);
-
-  const [cursosExtras, setCursosExtras] = useState("");
-  const [certificadoNome, setCertificadoNome] = useState("");
   const [experiencias, setExperiencias] = useState("");
-  const [curriculoNome, setCurriculoNome] = useState("");
 
-  // Feedback Toast/Alert
+  // CRUD de Currículo
+  const [curriculo, setCurriculo] = useState<CurriculoModel | null>(null);
+  const [enviandoCurriculo, setEnviandoCurriculo] = useState(false);
+
+  // CRUD de Certificados
+  const [certificados, setCertificados] = useState<CertificadoModel[]>([]);
+  const [nomeNovoCertificado, setNomeNovoCertificado] = useState("");
+  const [enviandoCertificado, setEnviandoCertificado] = useState(false);
+
   const [feedbackMsg, setFeedbackMsg] = useState("");
 
-  // Alternador de acordeão
   const toggleCard = (nomeCard: string) => {
     setCardAberto((prev) => (prev === nomeCard ? "" : nomeCard));
   };
 
-  // Carrega os dados reais do Firestore ao abrir
+  // Carrega informações completas do usuário
   useEffect(() => {
     if (visible) {
-      async function buscarDados() {
+      async function carregarDadosCompletos() {
         const user = auth.currentUser;
         if (!user) return;
 
@@ -106,27 +118,66 @@ export default function ModalEditarPerfilAluno({
             setEndereco(data.endereco || "");
             setEmail(data.email || user.email || "");
             setTelefone(data.telefone || "");
+            setFotoUrl(data.fotoUrl || "");
 
             if (data.curso) setCurso(data.curso);
             if (data.semestre) setSemestre(data.semestre);
-            setCursosExtras(data.cursosExtras || "");
-            setCertificadoNome(data.certificadoNome || "");
             setExperiencias(data.experiencias || "");
-            setCurriculoNome(data.curriculoNome || "");
+            setCurriculo(data.curriculo || null);
+            setCertificados((data.certificados as CertificadoModel[]) || []);
           }
         } catch (error) {
-          console.log("Erro ao carregar perfil:", error);
+          console.log("Erro ao carregar dados:", error);
         } finally {
           setCarregandoDados(false);
         }
       }
 
-      buscarDados();
+      carregarDadosCompletos();
     }
   }, [visible]);
 
-  // Upload/Seleção de Arquivo (PDF)
-  const selecionarArquivoPdf = async (tipo: "certificado" | "curriculo") => {
+  // =====================================================
+  // AÇÃO 1: SELECIONAR E ENVIAR FOTO DE PERFIL
+  // =====================================================
+  const handleSelecionarFoto = async () => {
+    try {
+      const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissao.granted) {
+        Alert.alert(
+          "Atenção",
+          "Precisamos de permissão para acessar a galeria.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setEnviandoFoto(true);
+        const novaUrl = await AlunoArquivosService.uploadFotoPerfil(
+          result.assets[0].uri,
+        );
+        setFotoUrl(novaUrl);
+        if (onPerfilAtualizado) onPerfilAtualizado();
+      }
+    } catch (error) {
+      console.log("Erro ao enviar foto:", error);
+      Alert.alert("Erro", "Não foi possível carregar a imagem.");
+    } finally {
+      setEnviandoFoto(false);
+    }
+  };
+
+  // =====================================================
+  // AÇÃO 2: SELECIONAR E ENVIAR CURRÍCULO (PDF)
+  // =====================================================
+  const handleUploadCurriculo = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: "application/pdf",
@@ -135,18 +186,92 @@ export default function ModalEditarPerfilAluno({
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
-        if (tipo === "certificado") {
-          setCertificadoNome(file.name);
-        } else {
-          setCurriculoNome(file.name);
-        }
+        setEnviandoCurriculo(true);
+
+        const novoCurriculo = await AlunoArquivosService.uploadCurriculo(
+          file.uri,
+          file.name,
+        );
+        setCurriculo(novoCurriculo);
+        if (onPerfilAtualizado) onPerfilAtualizado();
       }
-    } catch (err) {
-      console.log("Erro ao selecionar PDF:", err);
+    } catch (error) {
+      console.log("Erro no currículo:", error);
+      Alert.alert("Erro", "Falha ao enviar o currículo.");
+    } finally {
+      setEnviandoCurriculo(false);
     }
   };
 
-  // Salvar no Firestore
+  // =====================================================
+  // AÇÃO 3: ADICIONAR CERTIFICADO (PDF)
+  // =====================================================
+  const handleAdicionarCertificado = async () => {
+    if (!nomeNovoCertificado.trim()) {
+      Alert.alert(
+        "Campo Obrigatório",
+        "Digite o nome ou curso do certificado antes de anexar o PDF.",
+      );
+      return;
+    }
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "application/pdf",
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        setEnviandoCertificado(true);
+
+        const novo = await AlunoArquivosService.adicionarCertificado(
+          nomeNovoCertificado,
+          file.uri,
+          file.name,
+        );
+
+        setCertificados((prev) => [...prev, novo]);
+        setNomeNovoCertificado("");
+        if (onPerfilAtualizado) onPerfilAtualizado();
+      }
+    } catch (error) {
+      console.log("Erro ao adicionar certificado:", error);
+      Alert.alert("Erro", "Falha ao enviar o certificado.");
+    } finally {
+      setEnviandoCertificado(false);
+    }
+  };
+
+  // =====================================================
+  // AÇÃO 4: EXCLUIR CERTIFICADO
+  // =====================================================
+  const handleExcluirCertificado = (cert: CertificadoModel) => {
+    Alert.alert(
+      "Excluir Certificado",
+      `Deseja realmente excluir "${cert.nome}"?`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Excluir",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await AlunoArquivosService.excluirCertificado(cert);
+              setCertificados((prev) =>
+                prev.filter((item) => item.id !== cert.id),
+              );
+              if (onPerfilAtualizado) onPerfilAtualizado();
+            } catch (error) {
+              Alert.alert("Erro", "Não foi possível remover o certificado.");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Salvar alterações de texto no Firestore
   const handleSalvar = async () => {
     const user = auth.currentUser;
     if (!user) return;
@@ -163,23 +288,20 @@ export default function ModalEditarPerfilAluno({
         instituicao: "FATEC",
         curso,
         semestre,
-        cursosExtras: cursosExtras.trim(),
-        certificadoNome,
         experiencias: experiencias.trim(),
-        curriculoNome,
         atualizadoEm: new Date().toISOString(),
       });
 
-      setFeedbackMsg("Informações atualizadas com sucesso!");
+      setFeedbackMsg("Perfil salvo com sucesso!");
       if (onPerfilAtualizado) onPerfilAtualizado();
 
       setTimeout(() => {
         setFeedbackMsg("");
         onClose();
-      }, 1400);
+      }, 1200);
     } catch (error) {
-      console.log("Erro ao salvar perfil:", error);
-      setFeedbackMsg("Erro ao salvar alterações. Tente novamente.");
+      console.log("Erro ao salvar:", error);
+      setFeedbackMsg("Erro ao salvar dados.");
     } finally {
       setSalvando(false);
     }
@@ -199,7 +321,7 @@ export default function ModalEditarPerfilAluno({
       >
         <TouchableWithoutFeedback>
           <View style={styles.modalCard}>
-            {/* TOPO COM TÍTULO E BOTÃO FECHAR */}
+            {/* TOPO */}
             <View style={styles.headerRow}>
               <Text style={styles.modalTitle}>ATUALIZAR MEU PERFIL</Text>
               <TouchableOpacity
@@ -211,7 +333,7 @@ export default function ModalEditarPerfilAluno({
               </TouchableOpacity>
             </View>
 
-            {/* SELETOR DE ABAS: PESSOAL E PROFISSIONAL */}
+            {/* SELETOR DE ABAS */}
             <View style={styles.tabSelector}>
               <TouchableOpacity
                 style={[
@@ -278,6 +400,36 @@ export default function ModalEditarPerfilAluno({
                 {/* ================= ABA PESSOAL ================= */}
                 {tabAtiva === "pessoal" && (
                   <View style={styles.tabContent}>
+                    {/* FOTO DE PERFIL */}
+                    <View style={styles.photoSection}>
+                      <TouchableOpacity
+                        style={styles.avatarWrapper}
+                        activeOpacity={0.8}
+                        onPress={handleSelecionarFoto}
+                        disabled={enviandoFoto}
+                      >
+                        {fotoUrl ? (
+                          <Image
+                            source={{ uri: fotoUrl }}
+                            style={styles.avatarImage}
+                          />
+                        ) : (
+                          <Ionicons name="person" size={44} color="#5599FE" />
+                        )}
+
+                        <View style={styles.cameraIconBadge}>
+                          {enviandoFoto ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Ionicons name="camera" size={14} color="#FFFFFF" />
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                      <Text style={styles.photoHintText}>
+                        Toque para alterar sua foto
+                      </Text>
+                    </View>
+
                     {/* CARD 1: DADOS BÁSICOS */}
                     <View style={styles.compactCard}>
                       <TouchableOpacity
@@ -311,7 +463,7 @@ export default function ModalEditarPerfilAluno({
                             style={styles.inputField}
                             value={nome}
                             onChangeText={setNome}
-                            placeholder="Seu nome completo"
+                            placeholder="Seu nome"
                           />
 
                           <Text style={styles.fieldLabel}>
@@ -321,7 +473,6 @@ export default function ModalEditarPerfilAluno({
                             style={[styles.inputField, styles.disabledInput]}
                             value={cpf}
                             editable={false}
-                            placeholder="CPF cadastrado"
                           />
 
                           <Text style={styles.fieldLabel}>IDADE</Text>
@@ -330,22 +481,24 @@ export default function ModalEditarPerfilAluno({
                             value={idade}
                             onChangeText={setIdade}
                             keyboardType="numeric"
-                            placeholder="Ex: 21"
+                            placeholder="Ex: 22"
                             maxLength={3}
                           />
 
-                          <Text style={styles.fieldLabel}>ENDEREÇO</Text>
+                          <Text style={styles.fieldLabel}>
+                            ENDEREÇO / CIDADE
+                          </Text>
                           <TextInput
                             style={styles.inputField}
                             value={endereco}
                             onChangeText={setEndereco}
-                            placeholder="Cidade, Bairro, Estado"
+                            placeholder="Fernandópolis - SP"
                           />
                         </View>
                       )}
                     </View>
 
-                    {/* CARD 2: INFORMAÇÕES DE CONTATO */}
+                    {/* CARD 2: CONTATO */}
                     <View style={styles.compactCard}>
                       <TouchableOpacity
                         style={styles.cardHeaderToggle}
@@ -382,7 +535,6 @@ export default function ModalEditarPerfilAluno({
                             style={[styles.inputField, styles.disabledInput]}
                             value={email}
                             editable={false}
-                            placeholder="E-mail de login"
                           />
 
                           <Text style={styles.fieldLabel}>
@@ -442,7 +594,6 @@ export default function ModalEditarPerfilAluno({
                             editable={false}
                           />
 
-                          {/* Dropdown Curso */}
                           <Text style={styles.fieldLabel}>CURSO</Text>
                           <TouchableOpacity
                             style={styles.dropdownSelector}
@@ -490,9 +641,8 @@ export default function ModalEditarPerfilAluno({
                             </View>
                           )}
 
-                          {/* Dropdown Semestre */}
                           <Text style={[styles.fieldLabel, { marginTop: 10 }]}>
-                            SEMESTRE ATUAL
+                            SEMESTRE
                           </Text>
                           <TouchableOpacity
                             style={styles.dropdownSelector}
@@ -543,12 +693,12 @@ export default function ModalEditarPerfilAluno({
                       )}
                     </View>
 
-                    {/* CARD 2: CURSOS EXTRAS & CERTIFICADOS */}
+                    {/* CARD 2: CERTIFICADOS (CRUD COMPLETO) */}
                     <View style={styles.compactCard}>
                       <TouchableOpacity
                         style={styles.cardHeaderToggle}
                         activeOpacity={0.7}
-                        onPress={() => toggleCard("cursosCertificados")}
+                        onPress={() => toggleCard("certificados")}
                       >
                         <View style={styles.cardHeaderLeft}>
                           <Ionicons
@@ -557,12 +707,12 @@ export default function ModalEditarPerfilAluno({
                             color="#5599FE"
                           />
                           <Text style={styles.cardTitle}>
-                            Cursos & Certificados
+                            Certificados ({certificados.length})
                           </Text>
                         </View>
                         <Ionicons
                           name={
-                            cardAberto === "cursosCertificados"
+                            cardAberto === "certificados"
                               ? "chevron-up"
                               : "chevron-down"
                           }
@@ -571,47 +721,187 @@ export default function ModalEditarPerfilAluno({
                         />
                       </TouchableOpacity>
 
-                      {cardAberto === "cursosCertificados" && (
+                      {cardAberto === "certificados" && (
                         <View style={styles.cardBody}>
+                          {/* FORMULÁRIO DE ADICIONAR NOVO */}
                           <Text style={styles.fieldLabel}>
-                            CURSOS REALIZADOS
+                            NOME DO CURSO / CERTIFICADO
                           </Text>
                           <TextInput
-                            style={[styles.inputField, styles.textArea]}
-                            value={cursosExtras}
-                            onChangeText={setCursosExtras}
-                            placeholder="Ex: Formação React Native, Cisco Networking..."
-                            multiline={true}
-                            numberOfLines={3}
+                            style={styles.inputField}
+                            value={nomeNovoCertificado}
+                            onChangeText={setNomeNovoCertificado}
+                            placeholder="Ex: Formação React Native, Cisco..."
                           />
 
-                          <Text style={styles.fieldLabel}>
-                            ANEXAR CERTIFICADO (PDF)
-                          </Text>
                           <TouchableOpacity
-                            style={styles.btnUploadPdf}
+                            style={styles.btnAnexarCertificado}
                             activeOpacity={0.8}
-                            onPress={() => selecionarArquivoPdf("certificado")}
+                            onPress={handleAdicionarCertificado}
+                            disabled={enviandoCertificado}
                           >
-                            <Ionicons
-                              name="cloud-upload-outline"
-                              size={18}
-                              color="#5599FE"
-                              style={{ marginRight: 6 }}
-                            />
-                            <Text
-                              style={styles.btnUploadPdfText}
-                              numberOfLines={1}
-                            >
-                              {certificadoNome ||
-                                "Selecionar Certificado em PDF"}
-                            </Text>
+                            {enviandoCertificado ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons
+                                  name="add-circle-outline"
+                                  size={18}
+                                  color="#FFFFFF"
+                                  style={{ marginRight: 6 }}
+                                />
+                                <Text style={styles.btnAnexarCertificadoText}>
+                                  ANEXAR PDF & SALVAR
+                                </Text>
+                              </>
+                            )}
                           </TouchableOpacity>
+
+                          {/* LISTA DOS CERTIFICADOS CADASTRADOS (READ & DELETE) */}
+                          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
+                            CERTIFICADOS REGISTRADOS
+                          </Text>
+
+                          {certificados.length > 0 ? (
+                            certificados.map((cert) => (
+                              <View key={cert.id} style={styles.itemArquivoRow}>
+                                <View style={styles.itemArquivoIcon}>
+                                  <Ionicons
+                                    name="document-text"
+                                    size={20}
+                                    color="#5599FE"
+                                  />
+                                </View>
+                                <View style={styles.itemArquivoInfo}>
+                                  <Text
+                                    style={styles.itemArquivoTitulo}
+                                    numberOfLines={1}
+                                  >
+                                    {cert.nome}
+                                  </Text>
+                                  <Text
+                                    style={styles.itemArquivoSub}
+                                    numberOfLines={1}
+                                  >
+                                    {cert.arquivoNome}
+                                  </Text>
+                                </View>
+                                <TouchableOpacity
+                                  style={styles.btnExcluirArquivo}
+                                  activeOpacity={0.7}
+                                  onPress={() => handleExcluirCertificado(cert)}
+                                >
+                                  <Ionicons
+                                    name="trash-outline"
+                                    size={18}
+                                    color="#D32F2F"
+                                  />
+                                </TouchableOpacity>
+                              </View>
+                            ))
+                          ) : (
+                            <Text style={styles.emptyItemsText}>
+                              Nenhum certificado anexado ainda.
+                            </Text>
+                          )}
                         </View>
                       )}
                     </View>
 
-                    {/* CARD 3: EXPERIÊNCIAS PROFISSIONAIS */}
+                    {/* CARD 3: CURRÍCULO (PDF) */}
+                    <View style={styles.compactCard}>
+                      <TouchableOpacity
+                        style={styles.cardHeaderToggle}
+                        activeOpacity={0.7}
+                        onPress={() => toggleCard("curriculo")}
+                      >
+                        <View style={styles.cardHeaderLeft}>
+                          <Ionicons
+                            name="document-attach-outline"
+                            size={18}
+                            color="#5599FE"
+                          />
+                          <Text style={styles.cardTitle}>
+                            Currículo Atualizado (PDF)
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={
+                            cardAberto === "curriculo"
+                              ? "chevron-up"
+                              : "chevron-down"
+                          }
+                          size={20}
+                          color="#777777"
+                        />
+                      </TouchableOpacity>
+
+                      {cardAberto === "curriculo" && (
+                        <View style={styles.cardBody}>
+                          {curriculo ? (
+                            <View style={styles.itemArquivoRow}>
+                              <View style={styles.itemArquivoIcon}>
+                                <Ionicons
+                                  name="document"
+                                  size={20}
+                                  color="#2E7D32"
+                                />
+                              </View>
+                              <View style={styles.itemArquivoInfo}>
+                                <Text
+                                  style={styles.itemArquivoTitulo}
+                                  numberOfLines={1}
+                                >
+                                  {curriculo.arquivoNome}
+                                </Text>
+                                <Text style={styles.itemArquivoSub}>
+                                  Currículo enviado
+                                </Text>
+                              </View>
+                              <TouchableOpacity
+                                style={styles.btnSubstituirArquivo}
+                                activeOpacity={0.7}
+                                onPress={handleUploadCurriculo}
+                              >
+                                <Ionicons
+                                  name="sync-outline"
+                                  size={18}
+                                  color="#5599FE"
+                                />
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.btnUploadPdfDashed}
+                              activeOpacity={0.8}
+                              onPress={handleUploadCurriculo}
+                              disabled={enviandoCurriculo}
+                            >
+                              {enviandoCurriculo ? (
+                                <ActivityIndicator
+                                  size="small"
+                                  color="#5599FE"
+                                />
+                              ) : (
+                                <>
+                                  <Ionicons
+                                    name="cloud-upload-outline"
+                                    size={20}
+                                    color="#5599FE"
+                                    style={{ marginRight: 6 }}
+                                  />
+                                  <Text style={styles.btnUploadPdfDashedText}>
+                                    Anexar Currículo em PDF
+                                  </Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+
+                    {/* CARD 4: EXPERIÊNCIAS */}
                     <View style={styles.compactCard}>
                       <TouchableOpacity
                         style={styles.cardHeaderToggle}
@@ -642,70 +932,16 @@ export default function ModalEditarPerfilAluno({
                       {cardAberto === "experiencias" && (
                         <View style={styles.cardBody}>
                           <Text style={styles.fieldLabel}>
-                            HISTÓRICO DE ATUAÇÃO
+                            HISTÓRICO / PROJETOS
                           </Text>
                           <TextInput
                             style={[styles.inputField, styles.textArea]}
                             value={experiencias}
                             onChangeText={setExperiencias}
-                            placeholder="Descreva cargos anteriores, projetos práticos ou estágios..."
+                            placeholder="Descreva suas experiências, projetos da faculdade ou estágios..."
                             multiline={true}
                             numberOfLines={4}
                           />
-                        </View>
-                      )}
-                    </View>
-
-                    {/* CARD 4: CURRÍCULO (PDF) */}
-                    <View style={styles.compactCard}>
-                      <TouchableOpacity
-                        style={styles.cardHeaderToggle}
-                        activeOpacity={0.7}
-                        onPress={() => toggleCard("curriculo")}
-                      >
-                        <View style={styles.cardHeaderLeft}>
-                          <Ionicons
-                            name="document-text-outline"
-                            size={18}
-                            color="#5599FE"
-                          />
-                          <Text style={styles.cardTitle}>Currículo Geral</Text>
-                        </View>
-                        <Ionicons
-                          name={
-                            cardAberto === "curriculo"
-                              ? "chevron-up"
-                              : "chevron-down"
-                          }
-                          size={20}
-                          color="#777777"
-                        />
-                      </TouchableOpacity>
-
-                      {cardAberto === "curriculo" && (
-                        <View style={styles.cardBody}>
-                          <Text style={styles.fieldLabel}>
-                            ANEXAR CURRÍCULO EM PDF
-                          </Text>
-                          <TouchableOpacity
-                            style={styles.btnUploadPdf}
-                            activeOpacity={0.8}
-                            onPress={() => selecionarArquivoPdf("curriculo")}
-                          >
-                            <Ionicons
-                              name="document-attach-outline"
-                              size={18}
-                              color="#5599FE"
-                              style={{ marginRight: 6 }}
-                            />
-                            <Text
-                              style={styles.btnUploadPdfText}
-                              numberOfLines={1}
-                            >
-                              {curriculoNome ||
-                                "Anexar Currículo Atualizado (PDF)"}
-                            </Text>
-                          </TouchableOpacity>
                         </View>
                       )}
                     </View>
@@ -714,7 +950,7 @@ export default function ModalEditarPerfilAluno({
               </ScrollView>
             )}
 
-            {/* FEEDBACK STATUS */}
+            {/* FEEDBACK */}
             {feedbackMsg.length > 0 && (
               <Text
                 style={[
@@ -728,7 +964,7 @@ export default function ModalEditarPerfilAluno({
               </Text>
             )}
 
-            {/* BOTÃO FIXO: SALVAR ALTERAÇÕES */}
+            {/* BOTÃO SALVAR */}
             <View style={styles.footerContainer}>
               <TouchableOpacity
                 style={styles.btnSalvar}
@@ -826,6 +1062,45 @@ const styles = StyleSheet.create({
   },
   tabContent: {
     paddingBottom: 10,
+  },
+  photoSection: {
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  avatarWrapper: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: "#E8F0FE",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2.5,
+    borderColor: "#5599FE",
+    position: "relative",
+  },
+  avatarImage: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+  },
+  cameraIconBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    backgroundColor: "#5599FE",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "#FFFFFF",
+  },
+  photoHintText: {
+    fontSize: 11,
+    color: "#777777",
+    fontWeight: "600",
+    marginTop: 6,
   },
   compactCard: {
     backgroundColor: "#FAFAFA",
@@ -928,7 +1203,54 @@ const styles = StyleSheet.create({
     color: "#5599FE",
     fontWeight: "800",
   },
-  btnUploadPdf: {
+  btnAnexarCertificado: {
+    backgroundColor: "#5599FE",
+    borderRadius: 12,
+    height: 40,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  btnAnexarCertificadoText: {
+    color: "#FFFFFF",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  itemArquivoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+    marginBottom: 8,
+  },
+  itemArquivoIcon: {
+    marginRight: 8,
+  },
+  itemArquivoInfo: {
+    flex: 1,
+  },
+  itemArquivoTitulo: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#222222",
+  },
+  itemArquivoSub: {
+    fontSize: 10,
+    color: "#777777",
+    fontWeight: "600",
+  },
+  btnExcluirArquivo: {
+    padding: 6,
+  },
+  btnSubstituirArquivo: {
+    padding: 6,
+  },
+  btnUploadPdfDashed: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
     borderColor: "#5599FE",
@@ -939,13 +1261,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
   },
-  btnUploadPdfText: {
-    fontSize: 11.5,
+  btnUploadPdfDashedText: {
+    fontSize: 12,
     fontWeight: "700",
     color: "#5599FE",
-    maxWidth: "85%",
+  },
+  emptyItemsText: {
+    fontSize: 11,
+    color: "#888888",
+    fontStyle: "italic",
+    textAlign: "center",
+    marginVertical: 6,
   },
   loadingContainer: {
     paddingVertical: 40,
